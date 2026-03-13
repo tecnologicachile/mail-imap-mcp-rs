@@ -23,3 +23,6 @@
 
 # Logs
 *.log
+
+# Cache
+.cache/

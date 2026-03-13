@@ -1,9 +1,11 @@
 //! IMAP transport and session operations
 //!
-//! Provides timeout-bounded wrappers around `async-imap` operations. All network
-//! calls are enforced to use TLS, and timeouts are derived from server config.
+//! Provides timeout-bounded wrappers around `async-imap` operations. Supports
+//! both TLS and plaintext connections, with timeouts derived from server config.
 
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use async_imap::types::{Fetch, Flag};
@@ -13,6 +15,7 @@ use rustls::ClientConfig;
 use rustls::RootCertStore;
 use rustls_pki_types::ServerName;
 use secrecy::ExposeSecret;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpStream;
 use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
@@ -20,10 +23,57 @@ use tokio_rustls::TlsConnector;
 use crate::config::{AccountConfig, ServerConfig};
 use crate::errors::{AppError, AppResult};
 
-/// Type alias for authenticated IMAP session over TLS
-///
-/// Wraps the TLS stream type to simplify signatures throughout the codebase.
-pub type ImapSession = Session<tokio_rustls::client::TlsStream<TcpStream>>;
+/// Wrapper enum that supports both TLS and plaintext IMAP streams.
+#[derive(Debug)]
+pub enum ImapStream {
+    Tls(tokio_rustls::client::TlsStream<TcpStream>),
+    Plain(TcpStream),
+}
+
+impl AsyncRead for ImapStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            ImapStream::Tls(s) => Pin::new(s).poll_read(cx, buf),
+            ImapStream::Plain(s) => Pin::new(s).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for ImapStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            ImapStream::Tls(s) => Pin::new(s).poll_write(cx, buf),
+            ImapStream::Plain(s) => Pin::new(s).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            ImapStream::Tls(s) => Pin::new(s).poll_flush(cx),
+            ImapStream::Plain(s) => Pin::new(s).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            ImapStream::Tls(s) => Pin::new(s).poll_shutdown(cx),
+            ImapStream::Plain(s) => Pin::new(s).poll_shutdown(cx),
+        }
+    }
+}
+
+impl Unpin for ImapStream {}
+
+/// Type alias for authenticated IMAP session supporting both TLS and plaintext.
+pub type ImapSession = Session<ImapStream>;
 
 /// Get socket timeout duration from server config
 ///
@@ -36,24 +86,26 @@ fn socket_timeout(server: &ServerConfig) -> Duration {
 ///
 /// Performs full connection sequence with timeouts:
 /// 1. TCP connect
-/// 2. TLS handshake with system root certificates
+/// 2. TLS handshake (if `secure: true`) or plaintext (if `secure: false`)
 /// 3. Read IMAP greeting
 /// 4. LOGIN authentication
 ///
 /// # Security
 ///
-/// Rejects insecure connections (`secure: false`) to prevent password exposure.
+/// When `secure` is false, plaintext IMAP is used. This is intended for
+/// local proxies (e.g., OAuth2 proxy on localhost) and should only be used
+/// on trusted networks.
 ///
 /// # Timeouts
 ///
 /// - TCP connect: `connect_timeout_ms`
-/// - TLS handshake: `greeting_timeout_ms`
+/// - TLS handshake: `greeting_timeout_ms` (TLS mode only)
 /// - Greeting read: `greeting_timeout_ms`
 /// - LOGIN: `greeting_timeout_ms`
 ///
 /// # Errors
 ///
-/// - `InvalidInput` if `secure` is false or hostname is invalid for TLS SNI
+/// - `InvalidInput` if hostname is invalid for TLS SNI (TLS mode only)
 /// - `Timeout` if any connection phase times out
 /// - `AuthFailed` if authentication fails
 /// - `Internal` for TCP, TLS, or greeting failures
@@ -61,12 +113,6 @@ pub async fn connect_authenticated(
     server: &ServerConfig,
     account: &AccountConfig,
 ) -> AppResult<ImapSession> {
-    if !account.secure {
-        return Err(AppError::InvalidInput(
-            "insecure IMAP is not supported; set MAIL_IMAP_<ACCOUNT>_SECURE=true".to_owned(),
-        ));
-    }
-
     let connect_duration = Duration::from_millis(server.connect_timeout_ms);
     let greeting_duration = Duration::from_millis(server.greeting_timeout_ms);
 
@@ -78,21 +124,27 @@ pub async fn connect_authenticated(
     .map_err(|_| AppError::Timeout("tcp connect timeout".to_owned()))
     .and_then(|r| r.map_err(|e| AppError::Internal(format!("tcp connect failed: {e}"))))?;
 
-    let mut roots = RootCertStore::empty();
-    roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let tls_config = ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
-    let connector = TlsConnector::from(Arc::new(tls_config));
+    let mut client = if account.secure {
+        let mut roots = RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        let tls_config = ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let connector = TlsConnector::from(Arc::new(tls_config));
 
-    let server_name = ServerName::try_from(account.host.clone())
-        .map_err(|_| AppError::InvalidInput("invalid IMAP host for TLS SNI".to_owned()))?;
-    let tls_stream = timeout(greeting_duration, connector.connect(server_name, tcp))
-        .await
-        .map_err(|_| AppError::Timeout("TLS handshake timeout".to_owned()))
-        .and_then(|r| r.map_err(|e| AppError::Internal(format!("TLS handshake failed: {e}"))))?;
+        let server_name = ServerName::try_from(account.host.clone())
+            .map_err(|_| AppError::InvalidInput("invalid IMAP host for TLS SNI".to_owned()))?;
+        let tls_stream = timeout(greeting_duration, connector.connect(server_name, tcp))
+            .await
+            .map_err(|_| AppError::Timeout("TLS handshake timeout".to_owned()))
+            .and_then(|r| {
+                r.map_err(|e| AppError::Internal(format!("TLS handshake failed: {e}")))
+            })?;
 
-    let mut client = Client::new(tls_stream);
+        Client::new(ImapStream::Tls(tls_stream))
+    } else {
+        Client::new(ImapStream::Plain(tcp))
+    };
     let greeting = timeout(greeting_duration, client.read_response())
         .await
         .map_err(|_| AppError::Timeout("IMAP greeting timeout".to_owned()))
@@ -437,6 +489,153 @@ pub async fn append(
     .await
     .map_err(|_| AppError::Timeout("APPEND timed out".to_owned()))
     .and_then(|r| r.map_err(|e| AppError::Internal(format!("APPEND failed: {e}"))))
+}
+
+/// Create a new mailbox/folder
+pub async fn create_mailbox(
+    server: &ServerConfig,
+    session: &mut ImapSession,
+    mailbox: &str,
+) -> AppResult<()> {
+    timeout(socket_timeout(server), session.create(mailbox))
+        .await
+        .map_err(|_| AppError::Timeout(format!("CREATE timed out for mailbox '{mailbox}'")))
+        .and_then(|r| {
+            r.map_err(|e| {
+                AppError::Internal(format!("CREATE failed for mailbox '{mailbox}': {e}"))
+            })
+        })
+}
+
+/// Delete a mailbox/folder
+pub async fn delete_mailbox(
+    server: &ServerConfig,
+    session: &mut ImapSession,
+    mailbox: &str,
+) -> AppResult<()> {
+    timeout(socket_timeout(server), session.delete(mailbox))
+        .await
+        .map_err(|_| AppError::Timeout(format!("DELETE timed out for mailbox '{mailbox}'")))
+        .and_then(|r| {
+            r.map_err(|e| {
+                AppError::Internal(format!("DELETE failed for mailbox '{mailbox}': {e}"))
+            })
+        })
+}
+
+/// Rename a mailbox/folder
+pub async fn rename_mailbox(
+    server: &ServerConfig,
+    session: &mut ImapSession,
+    from: &str,
+    to: &str,
+) -> AppResult<()> {
+    timeout(socket_timeout(server), session.rename(from, to))
+        .await
+        .map_err(|_| AppError::Timeout(format!("RENAME timed out for mailbox '{from}'")))
+        .and_then(|r| {
+            r.map_err(|e| {
+                AppError::Internal(format!("RENAME failed for mailbox '{from}' -> '{to}': {e}"))
+            })
+        })
+}
+
+/// Get mailbox status (message counts) without selecting it
+///
+/// Returns (messages, unseen, recent) counts.
+pub async fn mailbox_status(
+    server: &ServerConfig,
+    session: &mut ImapSession,
+    mailbox: &str,
+) -> AppResult<(u32, u32, u32)> {
+    let mbox = timeout(
+        socket_timeout(server),
+        session.status(mailbox, "(MESSAGES UNSEEN RECENT)"),
+    )
+    .await
+    .map_err(|_| AppError::Timeout(format!("STATUS timed out for mailbox '{mailbox}'")))
+    .and_then(|r| {
+        r.map_err(|e| {
+            AppError::Internal(format!("STATUS failed for mailbox '{mailbox}': {e}"))
+        })
+    })?;
+
+    Ok((mbox.exists, mbox.unseen.unwrap_or(0) as u32, mbox.recent))
+}
+
+/// Store flags on multiple messages at once
+///
+/// `uid_set` is a comma-separated list of UIDs (e.g., "1,2,3" or "1:100").
+pub async fn uid_store_bulk(
+    server: &ServerConfig,
+    session: &mut ImapSession,
+    uid_set: &str,
+    query: &str,
+) -> AppResult<()> {
+    let stream = timeout(socket_timeout(server), session.uid_store(uid_set, query))
+        .await
+        .map_err(|_| AppError::Timeout("UID STORE (bulk) timed out".to_owned()))
+        .and_then(|r| r.map_err(|e| AppError::Internal(format!("uid store (bulk) failed: {e}"))))?;
+    let _: Vec<Fetch> = timeout(socket_timeout(server), stream.try_collect())
+        .await
+        .map_err(|_| AppError::Timeout("UID STORE (bulk) stream timed out".to_owned()))
+        .and_then(|r| {
+            r.map_err(|e| AppError::Internal(format!("uid store (bulk) stream failed: {e}")))
+        })?;
+    Ok(())
+}
+
+/// Move multiple messages to another mailbox at once
+///
+/// `uid_set` is a comma-separated list of UIDs.
+pub async fn uid_move_bulk(
+    server: &ServerConfig,
+    session: &mut ImapSession,
+    uid_set: &str,
+    mailbox: &str,
+) -> AppResult<()> {
+    timeout(socket_timeout(server), session.uid_mv(uid_set, mailbox))
+        .await
+        .map_err(|_| AppError::Timeout("UID MOVE (bulk) timed out".to_owned()))
+        .and_then(|r| r.map_err(|e| AppError::Internal(format!("UID MOVE (bulk) failed: {e}"))))
+}
+
+/// Copy multiple messages to another mailbox at once
+///
+/// `uid_set` is a comma-separated list of UIDs.
+pub async fn uid_copy_bulk(
+    server: &ServerConfig,
+    session: &mut ImapSession,
+    uid_set: &str,
+    mailbox: &str,
+) -> AppResult<()> {
+    timeout(socket_timeout(server), session.uid_copy(uid_set, mailbox))
+        .await
+        .map_err(|_| AppError::Timeout("UID COPY (bulk) timed out".to_owned()))
+        .and_then(|r| r.map_err(|e| AppError::Internal(format!("UID COPY (bulk) failed: {e}"))))
+}
+
+/// Expunge multiple messages at once
+///
+/// `uid_set` is a comma-separated list of UIDs that should already have \Deleted flag.
+pub async fn uid_expunge_bulk(
+    server: &ServerConfig,
+    session: &mut ImapSession,
+    uid_set: &str,
+) -> AppResult<()> {
+    let stream = timeout(socket_timeout(server), session.uid_expunge(uid_set))
+        .await
+        .map_err(|_| AppError::Timeout("UID EXPUNGE (bulk) timed out".to_owned()))
+        .and_then(|r| {
+            r.map_err(|e| AppError::Internal(format!("UID EXPUNGE (bulk) failed: {e}")))
+        })?;
+    let _: Vec<u32> = timeout(socket_timeout(server), stream.try_collect())
+        .await
+        .map_err(|_| AppError::Timeout("UID EXPUNGE (bulk) stream timed out".to_owned()))
+        .and_then(|r| {
+            r.map_err(|e| AppError::Internal(format!("UID EXPUNGE (bulk) stream failed: {e}")))
+        })?;
+    Ok(())
 }
 
 #[cfg(test)]

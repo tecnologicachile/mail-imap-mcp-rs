@@ -356,3 +356,189 @@ fn default_body_max_chars() -> usize {
 fn default_raw_max_bytes() -> usize {
     200_000
 }
+
+/// Input: create a new mailbox/folder
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct CreateMailboxInput {
+    /// Account identifier (defaults to `"default"`)
+    #[serde(default = "default_account_id")]
+    pub account_id: String,
+    /// Name of the mailbox to create (e.g., `Archive/2024`, `Projects/Active`)
+    pub mailbox_name: String,
+}
+
+/// Input: delete a mailbox/folder
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct DeleteMailboxInput {
+    /// Account identifier (defaults to `"default"`)
+    #[serde(default = "default_account_id")]
+    pub account_id: String,
+    /// Name of the mailbox to delete
+    pub mailbox_name: String,
+    /// Explicit confirmation required (must be `true`)
+    pub confirm: bool,
+}
+
+/// Input: rename a mailbox/folder
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct RenameMailboxInput {
+    /// Account identifier (defaults to `"default"`)
+    #[serde(default = "default_account_id")]
+    pub account_id: String,
+    /// Current mailbox name
+    pub from_name: String,
+    /// New mailbox name
+    pub to_name: String,
+}
+
+/// Input: get mailbox status (message counts without selecting)
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct MailboxStatusInput {
+    /// Account identifier (defaults to `"default"`)
+    #[serde(default = "default_account_id")]
+    pub account_id: String,
+    /// Mailbox name to check status of
+    pub mailbox: String,
+}
+
+/// Input: bulk move messages to a mailbox
+///
+/// Moves up to 500 messages at once within the same account and source mailbox.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct BulkMoveInput {
+    /// Account identifier (defaults to `"default"`)
+    #[serde(default = "default_account_id")]
+    pub account_id: String,
+    /// List of stable message identifiers (all must be from the same mailbox)
+    pub message_ids: Vec<String>,
+    /// Destination mailbox name
+    pub destination_mailbox: String,
+}
+
+/// Input: bulk delete messages
+///
+/// Deletes up to 500 messages at once from the same mailbox.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct BulkDeleteInput {
+    /// Account identifier (defaults to `"default"`)
+    #[serde(default = "default_account_id")]
+    pub account_id: String,
+    /// List of stable message identifiers (all must be from the same mailbox)
+    pub message_ids: Vec<String>,
+    /// Explicit confirmation required (must be `true`)
+    pub confirm: bool,
+}
+
+/// Input: bulk update flags on messages
+///
+/// Updates flags on up to 500 messages at once from the same mailbox.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct BulkUpdateFlagsInput {
+    /// Account identifier (defaults to `"default"`)
+    #[serde(default = "default_account_id")]
+    pub account_id: String,
+    /// List of stable message identifiers (all must be from the same mailbox)
+    pub message_ids: Vec<String>,
+    /// Flags to add (e.g., `\\Seen`, `\\Flagged`)
+    pub add_flags: Option<Vec<String>>,
+    /// Flags to remove
+    pub remove_flags: Option<Vec<String>>,
+}
+
+/// Input: search and move messages in one operation
+///
+/// Combines search + bulk move to avoid round-trip overhead. The server
+/// executes the IMAP SEARCH, collects UIDs, and MOVEs them in a single
+/// tool call. Up to 500 messages per call.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct SearchAndMoveInput {
+    /// Account identifier (defaults to `"default"`)
+    #[serde(default = "default_account_id")]
+    pub account_id: String,
+    /// Source mailbox to search (e.g., `INBOX`)
+    pub mailbox: String,
+    /// Destination mailbox name
+    pub destination_mailbox: String,
+    /// Full-text search query
+    pub query: Option<String>,
+    /// Filter by From header
+    pub from: Option<String>,
+    /// Filter by To header
+    pub to: Option<String>,
+    /// Filter by Subject header
+    pub subject: Option<String>,
+    /// Filter to unread messages only
+    pub unread_only: Option<bool>,
+    /// Filter to messages from last N days
+    pub last_days: Option<u16>,
+    /// Filter to messages on or after this date (YYYY-MM-DD)
+    pub start_date: Option<String>,
+    /// Filter to messages before this date (YYYY-MM-DD)
+    pub end_date: Option<String>,
+    /// Maximum messages to move (1..500, default 500)
+    #[serde(default = "default_search_and_move_limit")]
+    pub limit: usize,
+}
+
+/// Default limit for search_and_move (process as many as possible)
+fn default_search_and_move_limit() -> usize {
+    500
+}
+
+/// Input: search and delete messages in one operation
+///
+/// Combines search + bulk delete. Requires `confirm=true`.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct SearchAndDeleteInput {
+    /// Account identifier (defaults to `"default"`)
+    #[serde(default = "default_account_id")]
+    pub account_id: String,
+    /// Source mailbox to search (e.g., `INBOX`)
+    pub mailbox: String,
+    /// Explicit confirmation required (must be `true`)
+    pub confirm: bool,
+    /// Full-text search query
+    pub query: Option<String>,
+    /// Filter by From header
+    pub from: Option<String>,
+    /// Filter by To header
+    pub to: Option<String>,
+    /// Filter by Subject header
+    pub subject: Option<String>,
+    /// Filter to unread messages only
+    pub unread_only: Option<bool>,
+    /// Filter to messages from last N days
+    pub last_days: Option<u16>,
+    /// Filter to messages on or after this date (YYYY-MM-DD)
+    pub start_date: Option<String>,
+    /// Filter to messages before this date (YYYY-MM-DD)
+    pub end_date: Option<String>,
+    /// Maximum messages to delete (1..500, default 500)
+    #[serde(default = "default_search_and_move_limit")]
+    pub limit: usize,
+}
+
+/// Input: append a raw message to a mailbox
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub struct AppendMessageInput {
+    /// Account identifier (defaults to `"default"`)
+    #[serde(default = "default_account_id")]
+    pub account_id: String,
+    /// Target mailbox name
+    pub mailbox: String,
+    /// Raw RFC822 message content (as UTF-8 string)
+    pub raw_message: String,
+}
+
+/// Mailbox status information
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MailboxStatusInfo {
+    /// Mailbox name
+    pub name: String,
+    /// Total number of messages
+    pub messages: u32,
+    /// Number of unseen/unread messages
+    pub unseen: u32,
+    /// Number of recent messages
+    pub recent: u32,
+}

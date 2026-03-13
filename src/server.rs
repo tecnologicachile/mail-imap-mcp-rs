@@ -1,6 +1,6 @@
 //! MCP server implementation with tool handlers
 //!
-//! Implements the `ServerHandler` trait and registers 10 MCP tools. Handles
+//! Implements the `ServerHandler` trait and registers 18 MCP tools. Handles
 //! input validation, business logic orchestration, and response formatting.
 
 use std::sync::Arc;
@@ -21,9 +21,12 @@ use crate::imap;
 use crate::message_id::MessageId;
 use crate::mime;
 use crate::models::{
-    AccountInfo, AccountOnlyInput, CopyMessageInput, DeleteMessageInput, GetMessageInput,
-    GetMessageRawInput, MailboxInfo, MessageDetail, MessageSummary, Meta, MoveMessageInput,
-    SearchMessagesInput, ToolEnvelope, UpdateMessageFlagsInput,
+    AccountInfo, AccountOnlyInput, AppendMessageInput, BulkDeleteInput, BulkMoveInput,
+    BulkUpdateFlagsInput, CopyMessageInput, CreateMailboxInput, DeleteMailboxInput,
+    DeleteMessageInput, GetMessageInput, GetMessageRawInput, MailboxInfo, MailboxStatusInfo,
+    MailboxStatusInput, MessageDetail, MessageSummary, Meta, MoveMessageInput, RenameMailboxInput,
+    SearchAndDeleteInput, SearchAndMoveInput, SearchMessagesInput, ToolEnvelope,
+    UpdateMessageFlagsInput,
 };
 use crate::pagination::{CursorEntry, CursorStore};
 
@@ -33,6 +36,8 @@ const MAX_SEARCH_LIMIT: usize = 50;
 const MAX_ATTACHMENTS: usize = 50;
 /// Maximum UID search results stored in a cursor snapshot
 const MAX_CURSOR_UIDS_STORED: usize = 20_000;
+/// Maximum message IDs per bulk operation
+const MAX_BULK_IDS: usize = 500;
 
 /// IMAP MCP server
 ///
@@ -295,6 +300,210 @@ impl MailImapServer {
                 .await
                 .map(|data| ("Message deleted".to_owned(), data)),
         )
+    }
+
+    /// Tool: Create a new mailbox/folder
+    ///
+    /// Creates a mailbox. Requires `MAIL_IMAP_WRITE_ENABLED=true`.
+    #[tool(name = "imap_create_mailbox", description = "Create a new mailbox/folder")]
+    async fn create_mailbox(
+        &self,
+        Parameters(input): Parameters<CreateMailboxInput>,
+    ) -> Result<Json<ToolEnvelope<serde_json::Value>>, ErrorData> {
+        let started = Instant::now();
+        finalize_tool(
+            started,
+            "imap_create_mailbox",
+            self.create_mailbox_impl(input)
+                .await
+                .map(|data| ("Mailbox created".to_owned(), data)),
+        )
+    }
+
+    /// Tool: Delete a mailbox/folder
+    ///
+    /// Deletes a mailbox. Requires explicit `confirm=true` and
+    /// `MAIL_IMAP_WRITE_ENABLED=true`.
+    #[tool(name = "imap_delete_mailbox", description = "Delete a mailbox/folder")]
+    async fn delete_mailbox(
+        &self,
+        Parameters(input): Parameters<DeleteMailboxInput>,
+    ) -> Result<Json<ToolEnvelope<serde_json::Value>>, ErrorData> {
+        let started = Instant::now();
+        finalize_tool(
+            started,
+            "imap_delete_mailbox",
+            self.delete_mailbox_impl(input)
+                .await
+                .map(|data| ("Mailbox deleted".to_owned(), data)),
+        )
+    }
+
+    /// Tool: Rename a mailbox/folder
+    ///
+    /// Renames a mailbox. Requires `MAIL_IMAP_WRITE_ENABLED=true`.
+    #[tool(name = "imap_rename_mailbox", description = "Rename a mailbox/folder")]
+    async fn rename_mailbox(
+        &self,
+        Parameters(input): Parameters<RenameMailboxInput>,
+    ) -> Result<Json<ToolEnvelope<serde_json::Value>>, ErrorData> {
+        let started = Instant::now();
+        finalize_tool(
+            started,
+            "imap_rename_mailbox",
+            self.rename_mailbox_impl(input)
+                .await
+                .map(|data| ("Mailbox renamed".to_owned(), data)),
+        )
+    }
+
+    /// Tool: Get mailbox status (message counts)
+    ///
+    /// Returns message, unseen, and recent counts without selecting the mailbox.
+    #[tool(
+        name = "imap_mailbox_status",
+        description = "Get mailbox message counts (total, unseen, recent) without selecting it"
+    )]
+    async fn mailbox_status(
+        &self,
+        Parameters(input): Parameters<MailboxStatusInput>,
+    ) -> Result<Json<ToolEnvelope<serde_json::Value>>, ErrorData> {
+        let started = Instant::now();
+        finalize_tool(
+            started,
+            "imap_mailbox_status",
+            self.mailbox_status_impl(input)
+                .await
+                .map(|data| ("Mailbox status retrieved".to_owned(), data)),
+        )
+    }
+
+    /// Tool: Bulk move messages to a mailbox
+    ///
+    /// Moves up to 500 messages at once. All messages must be from the same
+    /// mailbox. Requires `MAIL_IMAP_WRITE_ENABLED=true`.
+    #[tool(
+        name = "imap_bulk_move",
+        description = "Move up to 500 messages to a mailbox in one operation"
+    )]
+    async fn bulk_move(
+        &self,
+        Parameters(input): Parameters<BulkMoveInput>,
+    ) -> Result<Json<ToolEnvelope<serde_json::Value>>, ErrorData> {
+        let started = Instant::now();
+        let result = self.bulk_move_impl(input).await.map(|data| {
+            let moved = data["moved_count"].as_u64().unwrap_or(0);
+            (format!("{moved} message(s) moved"), data)
+        });
+        finalize_tool(started, "imap_bulk_move", result)
+    }
+
+    /// Tool: Bulk delete messages
+    ///
+    /// Deletes up to 500 messages at once. All messages must be from the same
+    /// mailbox. Requires explicit `confirm=true` and `MAIL_IMAP_WRITE_ENABLED=true`.
+    #[tool(
+        name = "imap_bulk_delete",
+        description = "Delete up to 500 messages in one operation"
+    )]
+    async fn bulk_delete(
+        &self,
+        Parameters(input): Parameters<BulkDeleteInput>,
+    ) -> Result<Json<ToolEnvelope<serde_json::Value>>, ErrorData> {
+        let started = Instant::now();
+        let result = self.bulk_delete_impl(input).await.map(|data| {
+            let deleted = data["deleted_count"].as_u64().unwrap_or(0);
+            (format!("{deleted} message(s) deleted"), data)
+        });
+        finalize_tool(started, "imap_bulk_delete", result)
+    }
+
+    /// Tool: Bulk update flags on messages
+    ///
+    /// Updates flags on up to 500 messages at once. All messages must be from
+    /// the same mailbox. Requires `MAIL_IMAP_WRITE_ENABLED=true`.
+    #[tool(
+        name = "imap_bulk_update_flags",
+        description = "Update flags on up to 500 messages in one operation"
+    )]
+    async fn bulk_update_flags(
+        &self,
+        Parameters(input): Parameters<BulkUpdateFlagsInput>,
+    ) -> Result<Json<ToolEnvelope<serde_json::Value>>, ErrorData> {
+        let started = Instant::now();
+        let result = self.bulk_update_flags_impl(input).await.map(|data| {
+            let updated = data["updated_count"].as_u64().unwrap_or(0);
+            (format!("{updated} message(s) flags updated"), data)
+        });
+        finalize_tool(started, "imap_bulk_update_flags", result)
+    }
+
+    /// Tool: Append a raw RFC822 message to a mailbox
+    ///
+    /// Inserts a message into the specified mailbox. Requires
+    /// `MAIL_IMAP_WRITE_ENABLED=true`.
+    #[tool(
+        name = "imap_append_message",
+        description = "Append a raw RFC822 message to a mailbox"
+    )]
+    async fn append_message(
+        &self,
+        Parameters(input): Parameters<AppendMessageInput>,
+    ) -> Result<Json<ToolEnvelope<serde_json::Value>>, ErrorData> {
+        let started = Instant::now();
+        finalize_tool(
+            started,
+            "imap_append_message",
+            self.append_message_impl(input)
+                .await
+                .map(|data| ("Message appended".to_owned(), data)),
+        )
+    }
+
+    /// Tool: Search and move messages in one operation
+    ///
+    /// Combines IMAP SEARCH + MOVE to avoid round-trip overhead. Searches the
+    /// source mailbox and moves up to 500 matching messages to the destination.
+    /// Requires `MAIL_IMAP_WRITE_ENABLED=true`.
+    #[tool(
+        name = "imap_search_and_move",
+        description = "Search messages and move matches to a mailbox in one operation (up to 500)"
+    )]
+    async fn search_and_move(
+        &self,
+        Parameters(input): Parameters<SearchAndMoveInput>,
+    ) -> Result<Json<ToolEnvelope<serde_json::Value>>, ErrorData> {
+        let started = Instant::now();
+        let result = self.search_and_move_impl(input).await.map(|data| {
+            let moved = data["moved_count"].as_u64().unwrap_or(0);
+            let has_more = data["has_more"].as_bool().unwrap_or(false);
+            let suffix = if has_more { "; more remain" } else { "" };
+            (format!("{moved} message(s) moved{suffix}"), data)
+        });
+        finalize_tool(started, "imap_search_and_move", result)
+    }
+
+    /// Tool: Search and delete messages in one operation
+    ///
+    /// Combines IMAP SEARCH + DELETE to avoid round-trip overhead. Searches the
+    /// source mailbox and deletes up to 500 matching messages.
+    /// Requires `MAIL_IMAP_WRITE_ENABLED=true` and `confirm=true`.
+    #[tool(
+        name = "imap_search_and_delete",
+        description = "Search messages and delete matches in one operation (up to 500)"
+    )]
+    async fn search_and_delete(
+        &self,
+        Parameters(input): Parameters<SearchAndDeleteInput>,
+    ) -> Result<Json<ToolEnvelope<serde_json::Value>>, ErrorData> {
+        let started = Instant::now();
+        let result = self.search_and_delete_impl(input).await.map(|data| {
+            let deleted = data["deleted_count"].as_u64().unwrap_or(0);
+            let has_more = data["has_more"].as_bool().unwrap_or(false);
+            let suffix = if has_more { "; more remain" } else { "" };
+            (format!("{deleted} message(s) deleted{suffix}"), data)
+        });
+        finalize_tool(started, "imap_search_and_delete", result)
     }
 }
 
@@ -1606,6 +1815,486 @@ impl MailImapServer {
             "steps_succeeded": steps_succeeded,
         }))
     }
+
+    async fn create_mailbox_impl(
+        &self,
+        input: CreateMailboxInput,
+    ) -> AppResult<serde_json::Value> {
+        require_write_enabled(&self.config)?;
+        validate_account_id(&input.account_id)?;
+        validate_mailbox(&input.mailbox_name)?;
+
+        let account = self.config.get_account(&input.account_id)?;
+        let mut session = imap::connect_authenticated(&self.config, account).await?;
+        imap::create_mailbox(&self.config, &mut session, &input.mailbox_name).await?;
+
+        Ok(serde_json::json!({
+            "status": "ok",
+            "account_id": input.account_id,
+            "mailbox_name": input.mailbox_name,
+        }))
+    }
+
+    async fn delete_mailbox_impl(
+        &self,
+        input: DeleteMailboxInput,
+    ) -> AppResult<serde_json::Value> {
+        require_write_enabled(&self.config)?;
+        validate_account_id(&input.account_id)?;
+        validate_mailbox(&input.mailbox_name)?;
+        if !input.confirm {
+            return Err(AppError::InvalidInput(
+                "delete mailbox requires confirm=true".to_owned(),
+            ));
+        }
+
+        let account = self.config.get_account(&input.account_id)?;
+        let mut session = imap::connect_authenticated(&self.config, account).await?;
+        imap::delete_mailbox(&self.config, &mut session, &input.mailbox_name).await?;
+
+        Ok(serde_json::json!({
+            "status": "ok",
+            "account_id": input.account_id,
+            "mailbox_name": input.mailbox_name,
+        }))
+    }
+
+    async fn rename_mailbox_impl(
+        &self,
+        input: RenameMailboxInput,
+    ) -> AppResult<serde_json::Value> {
+        require_write_enabled(&self.config)?;
+        validate_account_id(&input.account_id)?;
+        validate_mailbox(&input.from_name)?;
+        validate_mailbox(&input.to_name)?;
+
+        let account = self.config.get_account(&input.account_id)?;
+        let mut session = imap::connect_authenticated(&self.config, account).await?;
+        imap::rename_mailbox(&self.config, &mut session, &input.from_name, &input.to_name).await?;
+
+        Ok(serde_json::json!({
+            "status": "ok",
+            "account_id": input.account_id,
+            "from_name": input.from_name,
+            "to_name": input.to_name,
+        }))
+    }
+
+    async fn mailbox_status_impl(
+        &self,
+        input: MailboxStatusInput,
+    ) -> AppResult<serde_json::Value> {
+        validate_account_id(&input.account_id)?;
+        validate_mailbox(&input.mailbox)?;
+
+        let account = self.config.get_account(&input.account_id)?;
+        let mut session = imap::connect_authenticated(&self.config, account).await?;
+        let (messages, unseen, recent) =
+            imap::mailbox_status(&self.config, &mut session, &input.mailbox).await?;
+
+        let status_info = MailboxStatusInfo {
+            name: input.mailbox.clone(),
+            messages,
+            unseen,
+            recent,
+        };
+
+        Ok(serde_json::json!({
+            "status": "ok",
+            "account_id": input.account_id,
+            "mailbox": status_info,
+        }))
+    }
+
+    async fn search_and_move_impl(
+        &self,
+        input: SearchAndMoveInput,
+    ) -> AppResult<serde_json::Value> {
+        require_write_enabled(&self.config)?;
+        validate_account_id(&input.account_id)?;
+        validate_mailbox(&input.mailbox)?;
+        validate_mailbox(&input.destination_mailbox)?;
+
+        // Validate search filters via a synthetic SearchMessagesInput
+        let search_input = SearchMessagesInput {
+            account_id: input.account_id.clone(),
+            mailbox: input.mailbox.clone(),
+            cursor: None,
+            query: input.query.clone(),
+            from: input.from.clone(),
+            to: input.to.clone(),
+            subject: input.subject.clone(),
+            unread_only: input.unread_only,
+            last_days: input.last_days,
+            start_date: input.start_date.clone(),
+            end_date: input.end_date.clone(),
+            limit: 1, // irrelevant; we use our own limit
+            include_snippet: false,
+            snippet_max_chars: None,
+        };
+        validate_search_input(&search_input)?;
+
+        let limit = input.limit.clamp(1, MAX_BULK_IDS);
+
+        let account = self.config.get_account(&input.account_id)?;
+        let mut session = imap::connect_authenticated(&self.config, account).await?;
+
+        // Search (read-only SELECT via EXAMINE)
+        let uidvalidity =
+            imap::select_mailbox_readonly(&self.config, &mut session, &input.mailbox).await?;
+        let query = build_search_query(&search_input)?;
+        let all_uids = imap::uid_search(&self.config, &mut session, &query).await?;
+
+        let total_matched = all_uids.len();
+        if total_matched == 0 {
+            return Ok(serde_json::json!({
+                "status": "ok",
+                "account_id": input.account_id,
+                "source_mailbox": input.mailbox,
+                "destination_mailbox": input.destination_mailbox,
+                "total_matched": 0,
+                "moved_count": 0,
+                "has_more": false,
+            }));
+        }
+
+        let uids_to_move: Vec<u32> = all_uids.into_iter().take(limit).collect();
+        let uid_set = uids_to_move
+            .iter()
+            .map(|u| u.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        // Need read-write SELECT for MOVE; re-open the mailbox
+        // (async-imap requires re-SELECT after EXAMINE)
+        let rw_uidvalidity =
+            imap::select_mailbox_readwrite(&self.config, &mut session, &input.mailbox).await?;
+        if rw_uidvalidity != uidvalidity {
+            return Err(AppError::Conflict(
+                "UIDVALIDITY changed between search and move".to_owned(),
+            ));
+        }
+
+        let caps = imap::capabilities(&self.config, &mut session).await?;
+        if caps.has_str("MOVE") {
+            imap::uid_move_bulk(&self.config, &mut session, &uid_set, &input.destination_mailbox)
+                .await?;
+        } else {
+            imap::uid_copy_bulk(&self.config, &mut session, &uid_set, &input.destination_mailbox)
+                .await?;
+            imap::uid_store_bulk(
+                &self.config,
+                &mut session,
+                &uid_set,
+                "+FLAGS.SILENT (\\Deleted)",
+            )
+            .await?;
+            imap::uid_expunge_bulk(&self.config, &mut session, &uid_set).await?;
+        }
+
+        let moved_count = uids_to_move.len();
+        let remaining = total_matched - moved_count;
+
+        Ok(serde_json::json!({
+            "status": "ok",
+            "account_id": input.account_id,
+            "source_mailbox": input.mailbox,
+            "destination_mailbox": input.destination_mailbox,
+            "total_matched": total_matched,
+            "moved_count": moved_count,
+            "remaining": remaining,
+            "has_more": remaining > 0,
+        }))
+    }
+
+    async fn search_and_delete_impl(
+        &self,
+        input: SearchAndDeleteInput,
+    ) -> AppResult<serde_json::Value> {
+        require_write_enabled(&self.config)?;
+        validate_account_id(&input.account_id)?;
+        validate_mailbox(&input.mailbox)?;
+        if !input.confirm {
+            return Err(AppError::InvalidInput(
+                "search_and_delete requires confirm=true".to_owned(),
+            ));
+        }
+
+        let search_input = SearchMessagesInput {
+            account_id: input.account_id.clone(),
+            mailbox: input.mailbox.clone(),
+            cursor: None,
+            query: input.query.clone(),
+            from: input.from.clone(),
+            to: input.to.clone(),
+            subject: input.subject.clone(),
+            unread_only: input.unread_only,
+            last_days: input.last_days,
+            start_date: input.start_date.clone(),
+            end_date: input.end_date.clone(),
+            limit: 1,
+            include_snippet: false,
+            snippet_max_chars: None,
+        };
+        validate_search_input(&search_input)?;
+
+        let limit = input.limit.clamp(1, MAX_BULK_IDS);
+
+        let account = self.config.get_account(&input.account_id)?;
+        let mut session = imap::connect_authenticated(&self.config, account).await?;
+
+        let uidvalidity =
+            imap::select_mailbox_readonly(&self.config, &mut session, &input.mailbox).await?;
+        let query = build_search_query(&search_input)?;
+        let all_uids = imap::uid_search(&self.config, &mut session, &query).await?;
+
+        let total_matched = all_uids.len();
+        if total_matched == 0 {
+            return Ok(serde_json::json!({
+                "status": "ok",
+                "account_id": input.account_id,
+                "mailbox": input.mailbox,
+                "total_matched": 0,
+                "deleted_count": 0,
+                "has_more": false,
+            }));
+        }
+
+        let uids_to_delete: Vec<u32> = all_uids.into_iter().take(limit).collect();
+        let uid_set = uids_to_delete
+            .iter()
+            .map(|u| u.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let rw_uidvalidity =
+            imap::select_mailbox_readwrite(&self.config, &mut session, &input.mailbox).await?;
+        if rw_uidvalidity != uidvalidity {
+            return Err(AppError::Conflict(
+                "UIDVALIDITY changed between search and delete".to_owned(),
+            ));
+        }
+
+        imap::uid_store_bulk(
+            &self.config,
+            &mut session,
+            &uid_set,
+            "+FLAGS.SILENT (\\Deleted)",
+        )
+        .await?;
+        imap::uid_expunge_bulk(&self.config, &mut session, &uid_set).await?;
+
+        let deleted_count = uids_to_delete.len();
+        let remaining = total_matched - deleted_count;
+
+        Ok(serde_json::json!({
+            "status": "ok",
+            "account_id": input.account_id,
+            "mailbox": input.mailbox,
+            "total_matched": total_matched,
+            "deleted_count": deleted_count,
+            "remaining": remaining,
+            "has_more": remaining > 0,
+        }))
+    }
+
+    async fn bulk_move_impl(&self, input: BulkMoveInput) -> AppResult<serde_json::Value> {
+        require_write_enabled(&self.config)?;
+        validate_account_id(&input.account_id)?;
+        validate_mailbox(&input.destination_mailbox)?;
+        validate_bulk_ids(&input.message_ids)?;
+
+        let parsed = parse_bulk_message_ids(&input.account_id, &input.message_ids)?;
+        let uid_set = parsed
+            .uids
+            .iter()
+            .map(|u| u.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let account = self.config.get_account(&input.account_id)?;
+        let mut session = imap::connect_authenticated(&self.config, account).await?;
+
+        let uidvalidity =
+            imap::select_mailbox_readwrite(&self.config, &mut session, &parsed.mailbox).await?;
+        if uidvalidity != parsed.uidvalidity {
+            return Err(AppError::Conflict(
+                "UIDVALIDITY changed; message IDs may be stale".to_owned(),
+            ));
+        }
+
+        let caps = imap::capabilities(&self.config, &mut session).await?;
+        if caps.has_str("MOVE") {
+            imap::uid_move_bulk(&self.config, &mut session, &uid_set, &input.destination_mailbox)
+                .await?;
+        } else {
+            imap::uid_copy_bulk(&self.config, &mut session, &uid_set, &input.destination_mailbox)
+                .await?;
+            imap::uid_store_bulk(
+                &self.config,
+                &mut session,
+                &uid_set,
+                "+FLAGS.SILENT (\\Deleted)",
+            )
+            .await?;
+            imap::uid_expunge_bulk(&self.config, &mut session, &uid_set).await?;
+        }
+
+        Ok(serde_json::json!({
+            "status": "ok",
+            "account_id": input.account_id,
+            "source_mailbox": parsed.mailbox,
+            "destination_mailbox": input.destination_mailbox,
+            "moved_count": parsed.uids.len(),
+        }))
+    }
+
+    async fn bulk_delete_impl(&self, input: BulkDeleteInput) -> AppResult<serde_json::Value> {
+        require_write_enabled(&self.config)?;
+        validate_account_id(&input.account_id)?;
+        if !input.confirm {
+            return Err(AppError::InvalidInput(
+                "bulk delete requires confirm=true".to_owned(),
+            ));
+        }
+        validate_bulk_ids(&input.message_ids)?;
+
+        let parsed = parse_bulk_message_ids(&input.account_id, &input.message_ids)?;
+        let uid_set = parsed
+            .uids
+            .iter()
+            .map(|u| u.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let account = self.config.get_account(&input.account_id)?;
+        let mut session = imap::connect_authenticated(&self.config, account).await?;
+
+        let uidvalidity =
+            imap::select_mailbox_readwrite(&self.config, &mut session, &parsed.mailbox).await?;
+        if uidvalidity != parsed.uidvalidity {
+            return Err(AppError::Conflict(
+                "UIDVALIDITY changed; message IDs may be stale".to_owned(),
+            ));
+        }
+
+        imap::uid_store_bulk(
+            &self.config,
+            &mut session,
+            &uid_set,
+            "+FLAGS.SILENT (\\Deleted)",
+        )
+        .await?;
+        imap::uid_expunge_bulk(&self.config, &mut session, &uid_set).await?;
+
+        Ok(serde_json::json!({
+            "status": "ok",
+            "account_id": input.account_id,
+            "mailbox": parsed.mailbox,
+            "deleted_count": parsed.uids.len(),
+        }))
+    }
+
+    async fn bulk_update_flags_impl(
+        &self,
+        input: BulkUpdateFlagsInput,
+    ) -> AppResult<serde_json::Value> {
+        require_write_enabled(&self.config)?;
+        validate_account_id(&input.account_id)?;
+        validate_bulk_ids(&input.message_ids)?;
+
+        let has_add = input.add_flags.as_ref().is_some_and(|f| !f.is_empty());
+        let has_remove = input.remove_flags.as_ref().is_some_and(|f| !f.is_empty());
+        if !has_add && !has_remove {
+            return Err(AppError::InvalidInput(
+                "at least one of add_flags or remove_flags is required".to_owned(),
+            ));
+        }
+        if let Some(ref flags) = input.add_flags {
+            validate_flags(flags, "add_flags")?;
+        }
+        if let Some(ref flags) = input.remove_flags {
+            validate_flags(flags, "remove_flags")?;
+        }
+
+        let parsed = parse_bulk_message_ids(&input.account_id, &input.message_ids)?;
+        let uid_set = parsed
+            .uids
+            .iter()
+            .map(|u| u.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+
+        let account = self.config.get_account(&input.account_id)?;
+        let mut session = imap::connect_authenticated(&self.config, account).await?;
+
+        let uidvalidity =
+            imap::select_mailbox_readwrite(&self.config, &mut session, &parsed.mailbox).await?;
+        if uidvalidity != parsed.uidvalidity {
+            return Err(AppError::Conflict(
+                "UIDVALIDITY changed; message IDs may be stale".to_owned(),
+            ));
+        }
+
+        if let Some(ref flags) = input.add_flags {
+            if !flags.is_empty() {
+                let flag_str = format!("+FLAGS.SILENT ({})", flags.join(" "));
+                imap::uid_store_bulk(&self.config, &mut session, &uid_set, &flag_str).await?;
+            }
+        }
+        if let Some(ref flags) = input.remove_flags {
+            if !flags.is_empty() {
+                let flag_str = format!("-FLAGS.SILENT ({})", flags.join(" "));
+                imap::uid_store_bulk(&self.config, &mut session, &uid_set, &flag_str).await?;
+            }
+        }
+
+        Ok(serde_json::json!({
+            "status": "ok",
+            "account_id": input.account_id,
+            "mailbox": parsed.mailbox,
+            "updated_count": parsed.uids.len(),
+            "add_flags": input.add_flags,
+            "remove_flags": input.remove_flags,
+        }))
+    }
+
+    async fn append_message_impl(
+        &self,
+        input: AppendMessageInput,
+    ) -> AppResult<serde_json::Value> {
+        require_write_enabled(&self.config)?;
+        validate_account_id(&input.account_id)?;
+        validate_mailbox(&input.mailbox)?;
+
+        if input.raw_message.is_empty() {
+            return Err(AppError::InvalidInput(
+                "raw_message must not be empty".to_owned(),
+            ));
+        }
+        if input.raw_message.len() > 10_000_000 {
+            return Err(AppError::InvalidInput(
+                "raw_message exceeds 10MB limit".to_owned(),
+            ));
+        }
+
+        let account = self.config.get_account(&input.account_id)?;
+        let mut session = imap::connect_authenticated(&self.config, account).await?;
+        imap::append(
+            &self.config,
+            &mut session,
+            &input.mailbox,
+            input.raw_message.as_bytes(),
+        )
+        .await?;
+
+        Ok(serde_json::json!({
+            "status": "ok",
+            "account_id": input.account_id,
+            "mailbox": input.mailbox,
+            "size_bytes": input.raw_message.len(),
+        }))
+    }
 }
 
 /// Calculate elapsed milliseconds
@@ -2260,6 +2949,67 @@ fn build_message_raw_uri(account_id: &str, mailbox: &str, uidvalidity: u32, uid:
 
 fn encode_raw_source_base64(raw: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(raw)
+}
+
+/// Validate bulk message ID list (non-empty, within limit)
+fn validate_bulk_ids(ids: &[String]) -> AppResult<()> {
+    if ids.is_empty() {
+        return Err(AppError::InvalidInput(
+            "message_ids must not be empty".to_owned(),
+        ));
+    }
+    if ids.len() > MAX_BULK_IDS {
+        return Err(AppError::InvalidInput(format!(
+            "message_ids exceeds maximum of {MAX_BULK_IDS}"
+        )));
+    }
+    Ok(())
+}
+
+/// Parsed bulk message IDs result
+struct BulkParsed {
+    mailbox: String,
+    uidvalidity: u32,
+    uids: Vec<u32>,
+}
+
+/// Parse and validate a list of message IDs for bulk operations.
+///
+/// All message IDs must belong to the same account, mailbox, and uidvalidity.
+fn parse_bulk_message_ids(account_id: &str, message_ids: &[String]) -> AppResult<BulkParsed> {
+    let mut mailbox: Option<String> = None;
+    let mut uidvalidity: Option<u32> = None;
+    let mut uids = Vec::with_capacity(message_ids.len());
+
+    for raw_id in message_ids {
+        let msg_id = parse_and_validate_message_id(account_id, raw_id)?;
+        match (&mailbox, &uidvalidity) {
+            (None, None) => {
+                mailbox = Some(msg_id.mailbox.clone());
+                uidvalidity = Some(msg_id.uidvalidity);
+            }
+            (Some(m), Some(uv)) => {
+                if *m != msg_id.mailbox {
+                    return Err(AppError::InvalidInput(
+                        "all message_ids must be from the same mailbox".to_owned(),
+                    ));
+                }
+                if *uv != msg_id.uidvalidity {
+                    return Err(AppError::InvalidInput(
+                        "all message_ids must have the same uidvalidity".to_owned(),
+                    ));
+                }
+            }
+            _ => unreachable!(),
+        }
+        uids.push(msg_id.uid);
+    }
+
+    Ok(BulkParsed {
+        mailbox: mailbox.unwrap(),
+        uidvalidity: uidvalidity.unwrap(),
+        uids,
+    })
 }
 
 #[cfg(test)]
