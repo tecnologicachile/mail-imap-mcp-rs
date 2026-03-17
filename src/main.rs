@@ -55,6 +55,10 @@ use tracing_subscriber::EnvFilter;
 /// ```
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Install the rustls CryptoProvider globally so that both tokio-rustls (IMAP)
+    // and lettre (SMTP) use the same provider without conflicts.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     dotenvy::dotenv().ok();
 
     if should_print_help(std::env::args().skip(1)) {

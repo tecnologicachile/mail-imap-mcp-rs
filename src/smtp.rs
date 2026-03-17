@@ -281,10 +281,9 @@ async fn build_transport(
                 ))
             })?;
             let access_token = tm.get_access_token(&config.account_id).await?;
-            // For XOAUTH2, lettre accepts Credentials where the password is the
-            // full XOAUTH2 SASL string when using Mechanism::Xoauth2
-            let sasl = oauth2::xoauth2_sasl(&config.user, &access_token);
-            let credentials = Credentials::new(config.user.clone(), sasl);
+            // For XOAUTH2, lettre builds the SASL string internally from
+            // Credentials(user, access_token) when using Mechanism::Xoauth2
+            let credentials = Credentials::new(config.user.clone(), access_token);
             builder = builder
                 .credentials(credentials)
                 .authentication(vec![Mechanism::Xoauth2]);

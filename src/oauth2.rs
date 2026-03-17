@@ -167,17 +167,27 @@ impl TokenManager {
     }
 
     /// Perform a refresh_token grant and cache the result.
+    ///
+    /// For public clients (empty `client_secret`), the `client_secret` parameter
+    /// is omitted from the token request per OAuth2 spec.
     async fn refresh_token(
         &self,
         account_id: &str,
         config: &OAuth2AccountConfig,
     ) -> AppResult<String> {
-        let params = [
+        let secret = config.client_secret.expose_secret();
+        let is_public_client = secret.is_empty()
+            || secret == "none"
+            || secret == "public";
+
+        let mut params = vec![
             ("grant_type", "refresh_token"),
-            ("client_id", &config.client_id),
-            ("client_secret", config.client_secret.expose_secret()),
+            ("client_id", config.client_id.as_str()),
             ("refresh_token", config.refresh_token.expose_secret()),
         ];
+        if !is_public_client {
+            params.push(("client_secret", secret));
+        }
 
         let response = self
             .http
