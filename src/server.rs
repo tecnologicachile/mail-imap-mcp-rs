@@ -607,9 +607,22 @@ impl MailImapServer {
 impl ServerHandler for MailImapServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
-            instructions: Some(
-                "Secure IMAP MCP server. Read operations are enabled by default; write tools require MAIL_IMAP_WRITE_ENABLED=true. SMTP send tools require MAIL_SMTP_WRITE_ENABLED=true.".to_owned(),
-            ),
+            instructions: Some(concat!(
+                "Secure IMAP MCP server. Read operations are enabled by default; ",
+                "write tools require MAIL_IMAP_WRITE_ENABLED=true. ",
+                "SMTP send tools require MAIL_SMTP_WRITE_ENABLED=true.\n\n",
+                "When working with tool results, write down any important information you might need later ",
+                "in your response, as the original tool result may be cleared later.\n\n",
+                "Provider notes:\n",
+                "- Microsoft personal (hotmail/outlook.com): SMTP AUTH is blocked by Microsoft. ",
+                "Use IMAP with App Password (https://account.live.com/proofs/AppPassword, requires 2FA). ",
+                "Sending requires Microsoft Graph API (not SMTP).\n",
+                "- Microsoft 365 (enterprise): SMTP AUTH works if admin enables it. ",
+                "Use App Password or OAuth2 for both IMAP and SMTP.\n",
+                "- Google Gmail: Use App Password (https://myaccount.google.com/apppasswords, requires 2FA) ",
+                "for IMAP and SMTP, or configure OAuth2.\n",
+                "- Zoho, Fastmail, other providers: Standard password auth works for IMAP and SMTP.",
+            ).to_owned()),
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             ..Default::default()
         }

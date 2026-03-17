@@ -1,0 +1,244 @@
+# Account Setup Guide
+
+This guide walks you through configuring email accounts for mail-imap-mcp-rs.
+
+## Quick Reference: Environment Variables
+
+Each account uses a segment name (e.g., `DEFAULT`, `WORK`, `PERSONAL`):
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `MAIL_IMAP_<SEG>_HOST` | Yes | — | IMAP server hostname |
+| `MAIL_IMAP_<SEG>_PORT` | No | 993 | IMAP port |
+| `MAIL_IMAP_<SEG>_USER` | Yes | — | Email address / username |
+| `MAIL_IMAP_<SEG>_PASS` | Yes* | — | Password or App Password (*optional with OAuth2) |
+| `MAIL_IMAP_<SEG>_SECURE` | No | true | Use TLS |
+| `MAIL_SMTP_<SEG>_HOST` | No | — | SMTP server hostname |
+| `MAIL_SMTP_<SEG>_PORT` | No | 587 | SMTP port |
+| `MAIL_SMTP_<SEG>_USER` | No | — | SMTP username (usually same as IMAP) |
+| `MAIL_SMTP_<SEG>_PASS` | No | — | SMTP password (*optional with OAuth2) |
+| `MAIL_SMTP_<SEG>_SECURE` | No | starttls | `starttls`, `tls`, or `plain` |
+| `MAIL_OAUTH2_<SEG>_PROVIDER` | No | — | `google` or `microsoft` |
+| `MAIL_OAUTH2_<SEG>_CLIENT_ID` | No | — | OAuth2 client ID |
+| `MAIL_OAUTH2_<SEG>_CLIENT_SECRET` | No | — | OAuth2 client secret (use `none` for public clients) |
+| `MAIL_OAUTH2_<SEG>_REFRESH_TOKEN` | No | — | OAuth2 refresh token |
+
+Global settings:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAIL_IMAP_WRITE_ENABLED` | false | Enable IMAP write operations |
+| `MAIL_SMTP_WRITE_ENABLED` | false | Enable SMTP send operations |
+| `MAIL_SMTP_SAVE_SENT` | true | Save sent emails to IMAP Sent folder |
+| `MAIL_SMTP_TIMEOUT_MS` | 30000 | SMTP operation timeout |
+
+---
+
+## Microsoft Personal (Hotmail / Outlook.com)
+
+### IMAP (reading email)
+
+Microsoft personal accounts require an **App Password** for IMAP access.
+
+**Prerequisites:** Two-factor authentication (2FA) must be enabled.
+
+**Step 1 — Enable 2FA** (skip if already enabled):
+1. Go to https://account.microsoft.com/security
+2. Click "Security" > enable "Two-step verification"
+
+**Step 2 — Create an App Password:**
+1. Go directly to: **https://account.live.com/proofs/AppPassword**
+2. Sign in if prompted
+3. Microsoft generates a 16-character password (e.g., `abcdefghijklmnop`)
+4. Copy it — you won't see it again
+
+**Step 3 — Configure:**
+```env
+MAIL_IMAP_DEFAULT_HOST=outlook.office365.com
+MAIL_IMAP_DEFAULT_PORT=993
+MAIL_IMAP_DEFAULT_USER=yourname@hotmail.com
+MAIL_IMAP_DEFAULT_PASS=abcdefghijklmnop
+MAIL_IMAP_DEFAULT_SECURE=true
+```
+
+### SMTP (sending email)
+
+> **Important:** Microsoft has disabled SMTP AUTH for personal accounts (hotmail.com, outlook.com, live.com). App Passwords do NOT work for SMTP on personal accounts. This is a Microsoft policy, not a limitation of this server.
+
+**Current workaround:** Use a different provider as SMTP relay (e.g., Zoho, Gmail) to send emails.
+
+**Future:** Microsoft Graph API support for sending emails from personal accounts is planned.
+
+---
+
+## Microsoft 365 (Enterprise / Work / School)
+
+Microsoft 365 business accounts can use SMTP AUTH if the admin has enabled it.
+
+### Check with your IT admin:
+- SMTP AUTH must be enabled for your mailbox in Exchange Online
+- Admin portal: https://admin.microsoft.com > Users > Active users > Mail > Manage email apps
+
+### With App Password (if 2FA enabled):
+1. Go to: **https://mysignins.microsoft.com/security-info**
+2. Add method > App password
+3. Use that password for both IMAP and SMTP
+
+### Configuration:
+```env
+MAIL_IMAP_WORK_HOST=outlook.office365.com
+MAIL_IMAP_WORK_PORT=993
+MAIL_IMAP_WORK_USER=you@company.com
+MAIL_IMAP_WORK_PASS=your-app-password
+MAIL_IMAP_WORK_SECURE=true
+
+MAIL_SMTP_WORK_HOST=smtp.office365.com
+MAIL_SMTP_WORK_PORT=587
+MAIL_SMTP_WORK_USER=you@company.com
+MAIL_SMTP_WORK_PASS=your-app-password
+MAIL_SMTP_WORK_SECURE=starttls
+```
+
+### With OAuth2 (advanced):
+If your organization has registered an Azure AD app with `SMTP.Send` and `IMAP.AccessAsUser.All` permissions:
+
+```env
+MAIL_OAUTH2_WORK_PROVIDER=microsoft
+MAIL_OAUTH2_WORK_CLIENT_ID=your-app-client-id
+MAIL_OAUTH2_WORK_CLIENT_SECRET=your-client-secret
+MAIL_OAUTH2_WORK_REFRESH_TOKEN=your-refresh-token
+```
+
+When OAuth2 is configured, `MAIL_IMAP_WORK_PASS` and `MAIL_SMTP_WORK_PASS` become optional.
+
+---
+
+## Google Gmail
+
+Gmail requires an **App Password** for IMAP/SMTP access (regular password is blocked).
+
+**Prerequisites:** Two-factor authentication (2FA) must be enabled.
+
+**Step 1 — Enable 2FA** (skip if already enabled):
+1. Go to: **https://myaccount.google.com/signinoptions/two-step-verification**
+
+**Step 2 — Create an App Password:**
+1. Go directly to: **https://myaccount.google.com/apppasswords**
+2. Name it (e.g., "mail-imap-mcp")
+3. Google generates a 16-character password
+4. Copy it
+
+**Step 3 — Configure:**
+```env
+MAIL_IMAP_GMAIL_HOST=imap.gmail.com
+MAIL_IMAP_GMAIL_PORT=993
+MAIL_IMAP_GMAIL_USER=you@gmail.com
+MAIL_IMAP_GMAIL_PASS=abcd efgh ijkl mnop
+MAIL_IMAP_GMAIL_SECURE=true
+
+MAIL_SMTP_GMAIL_HOST=smtp.gmail.com
+MAIL_SMTP_GMAIL_PORT=587
+MAIL_SMTP_GMAIL_USER=you@gmail.com
+MAIL_SMTP_GMAIL_PASS=abcd efgh ijkl mnop
+MAIL_SMTP_GMAIL_SECURE=starttls
+```
+
+---
+
+## Zoho Mail
+
+Zoho supports standard password authentication for IMAP and SMTP.
+
+```env
+MAIL_IMAP_DEFAULT_HOST=imap.zoho.com
+MAIL_IMAP_DEFAULT_PORT=993
+MAIL_IMAP_DEFAULT_USER=you@yourdomain.com
+MAIL_IMAP_DEFAULT_PASS=your-password
+MAIL_IMAP_DEFAULT_SECURE=true
+
+MAIL_SMTP_DEFAULT_HOST=smtp.zoho.com
+MAIL_SMTP_DEFAULT_PORT=587
+MAIL_SMTP_DEFAULT_USER=you@yourdomain.com
+MAIL_SMTP_DEFAULT_PASS=your-password
+MAIL_SMTP_DEFAULT_SECURE=starttls
+```
+
+> **Note:** If Zoho requires App-Specific Passwords, generate one at: https://accounts.zoho.com/home#security/security_mysessions
+
+---
+
+## Fastmail
+
+```env
+MAIL_IMAP_DEFAULT_HOST=imap.fastmail.com
+MAIL_IMAP_DEFAULT_PORT=993
+MAIL_IMAP_DEFAULT_USER=you@fastmail.com
+MAIL_IMAP_DEFAULT_PASS=your-app-password
+MAIL_IMAP_DEFAULT_SECURE=true
+
+MAIL_SMTP_DEFAULT_HOST=smtp.fastmail.com
+MAIL_SMTP_DEFAULT_PORT=587
+MAIL_SMTP_DEFAULT_USER=you@fastmail.com
+MAIL_SMTP_DEFAULT_PASS=your-app-password
+MAIL_SMTP_DEFAULT_SECURE=starttls
+```
+
+Generate App Password at: **https://www.fastmail.com/settings/security/devicekeys**
+
+---
+
+## Multi-Account Configuration
+
+You can configure multiple accounts using different segment names:
+
+```env
+# Personal Gmail
+MAIL_IMAP_GMAIL_HOST=imap.gmail.com
+MAIL_IMAP_GMAIL_USER=personal@gmail.com
+MAIL_IMAP_GMAIL_PASS=app-password-1
+
+# Work Microsoft 365
+MAIL_IMAP_WORK_HOST=outlook.office365.com
+MAIL_IMAP_WORK_USER=me@company.com
+MAIL_IMAP_WORK_PASS=app-password-2
+
+# Zoho (as default)
+MAIL_IMAP_DEFAULT_HOST=imap.zoho.com
+MAIL_IMAP_DEFAULT_USER=info@mydomain.com
+MAIL_IMAP_DEFAULT_PASS=zoho-password
+
+# SMTP for sending (only Zoho and Work have SMTP)
+MAIL_SMTP_DEFAULT_HOST=smtp.zoho.com
+MAIL_SMTP_DEFAULT_USER=info@mydomain.com
+MAIL_SMTP_DEFAULT_PASS=zoho-password
+MAIL_SMTP_DEFAULT_SECURE=starttls
+
+MAIL_SMTP_WORK_HOST=smtp.office365.com
+MAIL_SMTP_WORK_USER=me@company.com
+MAIL_SMTP_WORK_PASS=app-password-2
+MAIL_SMTP_WORK_SECURE=starttls
+```
+
+Use `account_id` parameter in tool calls: `"account_id": "gmail"`, `"account_id": "work"`, or `"account_id": "default"`.
+
+---
+
+## Troubleshooting
+
+### "basic authentication is disabled" (Microsoft)
+Microsoft personal accounts block SMTP AUTH. Use a different provider for sending, or wait for Graph API support.
+
+### "Authentication unsuccessful" (Microsoft)
+- Verify your App Password is correct (not your regular password)
+- Ensure 2FA is enabled: https://account.microsoft.com/security
+- Generate a new App Password: https://account.live.com/proofs/AppPassword
+
+### "Application-specific password required" (Google)
+- Enable 2FA: https://myaccount.google.com/signinoptions/two-step-verification
+- Create App Password: https://myaccount.google.com/apppasswords
+
+### "STARTTLS is not supported"
+Check `MAIL_SMTP_<SEG>_SECURE` — use `tls` instead of `starttls` if the server requires direct TLS (port 465).
+
+### SMTP send works but email not saved to Sent folder
+Ensure `MAIL_SMTP_SAVE_SENT=true` and that the IMAP account has write access (`MAIL_IMAP_WRITE_ENABLED=true`).
