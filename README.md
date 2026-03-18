@@ -1,38 +1,60 @@
-# mail-imap-mcp-rs
+<p align="center">
+  <h1 align="center">mail-imap-mcp-rs</h1>
+  <p align="center">
+    <strong>Production-ready email MCP server for AI agents</strong><br>
+    IMAP + SMTP + Microsoft Graph API — built in Rust
+  </p>
+  <p align="center">
+    <a href="https://github.com/tecnologicachile/mail-imap-mcp-rs/actions"><img src="https://img.shields.io/github/actions/workflow/status/tecnologicachile/mail-imap-mcp-rs/ci.yml?label=build" alt="Build"></a>
+    <a href="https://github.com/tecnologicachile/mail-imap-mcp-rs/releases"><img src="https://img.shields.io/github/v/release/tecnologicachile/mail-imap-mcp-rs?label=release" alt="Release"></a>
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/tecnologicachile/mail-imap-mcp-rs" alt="License"></a>
+    <a href="https://github.com/tecnologicachile/mail-imap-mcp-rs/stargazers"><img src="https://img.shields.io/github/stars/tecnologicachile/mail-imap-mcp-rs?style=social" alt="Stars"></a>
+  </p>
+</p>
 
-A secure, full-featured Model Context Protocol (MCP) server for email over stdio. Provides IMAP read/write, SMTP sending, and Microsoft Graph API support with multi-account configuration, OAuth2 authentication, and cursor-based pagination.
+---
 
-## Features
+Most email MCP servers only do IMAP reads. This one does **everything**: read, search, send, reply, forward, bulk operations, and Microsoft Graph API — with real OAuth2, multi-account, and multi-provider support. Written in Rust for speed and safety.
 
-- **IMAP**: Read, search, copy, move, flag, delete with cursor-based pagination
-- **SMTP**: Send, reply, forward emails via STARTTLS/TLS
-- **Microsoft Graph API**: Send emails from Microsoft accounts (personal and enterprise) where SMTP AUTH is blocked
-- **OAuth2**: Native XOAUTH2 support for Google and Microsoft (device code flow)
-- **Multi-account**: Configure multiple email accounts via environment variables
-- **Multi-provider**: Microsoft 365, Hotmail/Outlook.com, Gmail, Zoho, Fastmail, and any standard IMAP/SMTP server
-- **Secure by default**: TLS-only connections, passwords never logged, write operations gated
-- **Rust-powered**: Fast, memory-safe async implementation with tokio
+## Why This Project
 
-## Supported Providers
+| | mail-imap-mcp-rs | Typical email MCP |
+|---|:---:|:---:|
+| IMAP read/write | 18 tools | 3-5 tools |
+| SMTP send/reply/forward | Yes | No or broken |
+| Microsoft Graph API | Yes | No |
+| OAuth2 (XOAUTH2) | Native | No |
+| Multi-account | Yes | Single account |
+| Microsoft 365 + Hotmail | Both work | Usually neither |
+| Language | Rust (fast, safe) | TypeScript/Python |
+| Tests | 40 unit + integration | Mocks only |
 
-| Provider | IMAP | SMTP | Graph API | Auth |
-|----------|------|------|-----------|------|
-| Microsoft 365 (enterprise) | Yes | Depends on admin | Yes | OAuth2 / App Password |
-| Hotmail / Outlook.com | Yes | Blocked by Microsoft | Yes | OAuth2 + App Password |
-| Gmail | Yes | Yes | — | App Password |
-| Zoho | Yes | Yes | — | Password |
-| Fastmail | Yes | Yes | — | App Password |
-| Any IMAP/SMTP server | Yes | Yes | — | Password |
+## Feature Matrix
 
-## Quick Start
+| Provider | IMAP | SMTP | Graph API | OAuth2 | Multi-account |
+|----------|:----:|:----:|:---------:|:------:|:-------------:|
+| Microsoft 365 (enterprise) | Yes | Admin-dependent | Yes | Yes | Yes |
+| Hotmail / Outlook.com | Yes | Blocked by MS | Yes | Yes | Yes |
+| Gmail | Yes | Yes | — | Yes | Yes |
+| Zoho | Yes | Yes | — | — | Yes |
+| Fastmail | Yes | Yes | — | — | Yes |
+| Any IMAP/SMTP server | Yes | Yes | — | — | Yes |
 
-### MCP Configuration
+## Quickstart (2 minutes)
+
+```bash
+git clone https://github.com/tecnologicachile/mail-imap-mcp-rs.git
+cd mail-imap-mcp-rs
+cargo build --release
+```
+
+Add to your MCP client config (Claude Code, Cursor, etc.):
 
 ```json
 {
   "mcpServers": {
-    "mail-imap": {
-      "command": "/path/to/mail-imap-mcp-rs",
+    "mail": {
+      "command": "./target/release/mail-imap-mcp-rs",
       "env": {
         "MAIL_IMAP_DEFAULT_HOST": "imap.gmail.com",
         "MAIL_IMAP_DEFAULT_USER": "you@gmail.com",
@@ -50,96 +72,122 @@ A secure, full-featured Model Context Protocol (MCP) server for email over stdio
 }
 ```
 
-### Microsoft Account (Graph API)
+That's it. Your AI agent can now read, search, send, reply, and manage emails.
 
-For Microsoft accounts where SMTP is blocked, use Graph API with OAuth2:
+### Microsoft Account? Use Graph API
+
+Microsoft blocks SMTP on personal accounts. Use Graph API instead:
 
 ```json
 {
-  "mcpServers": {
-    "mail-imap": {
-      "command": "/path/to/mail-imap-mcp-rs",
-      "env": {
-        "MAIL_IMAP_DEFAULT_HOST": "outlook.office365.com",
-        "MAIL_IMAP_DEFAULT_USER": "you@hotmail.com",
-        "MAIL_IMAP_DEFAULT_PASS": "your-app-password",
-        "MAIL_IMAP_WRITE_ENABLED": "true",
-        "MAIL_SMTP_WRITE_ENABLED": "true",
-        "MAIL_OAUTH2_DEFAULT_PROVIDER": "microsoft",
-        "MAIL_OAUTH2_DEFAULT_CLIENT_ID": "9e5f94bc-e8a4-4e73-b8be-63364c29d753",
-        "MAIL_OAUTH2_DEFAULT_CLIENT_SECRET": "none",
-        "MAIL_OAUTH2_DEFAULT_REFRESH_TOKEN": "<your-refresh-token>"
-      }
-    }
+  "env": {
+    "MAIL_IMAP_DEFAULT_HOST": "outlook.office365.com",
+    "MAIL_IMAP_DEFAULT_USER": "you@hotmail.com",
+    "MAIL_IMAP_DEFAULT_PASS": "your-app-password",
+    "MAIL_OAUTH2_DEFAULT_PROVIDER": "microsoft",
+    "MAIL_OAUTH2_DEFAULT_CLIENT_ID": "9e5f94bc-e8a4-4e73-b8be-63364c29d753",
+    "MAIL_OAUTH2_DEFAULT_CLIENT_SECRET": "none",
+    "MAIL_OAUTH2_DEFAULT_REFRESH_TOKEN": "<your-token>"
   }
 }
 ```
 
-See [Account Setup Guide](docs/account-setup.md) for step-by-step instructions per provider, including how to obtain OAuth2 tokens via device code flow.
+Get your token in 1 minute with device code flow. See [Account Setup Guide](docs/account-setup.md).
 
-### Build from Source
+## 25 MCP Tools
 
-```bash
-cargo build --release
-# Binary at target/release/mail-imap-mcp-rs
-```
+### Read (7 tools)
 
-## Tools (25 total)
-
-### IMAP Read (7)
-
-| Tool | Purpose |
-|------|---------|
+| Tool | What it does |
+|------|-------------|
 | `imap_list_accounts` | List configured accounts |
-| `imap_verify_account` | Test connectivity and authentication |
-| `imap_list_mailboxes` | List mailboxes/folders |
-| `imap_mailbox_status` | Get message counts |
-| `imap_search_messages` | Search with cursor-based pagination |
-| `imap_get_message` | Get parsed message (text, HTML, attachments) |
-| `imap_get_message_raw` | Get RFC822 source |
+| `imap_verify_account` | Test connectivity and auth |
+| `imap_list_mailboxes` | List folders |
+| `imap_mailbox_status` | Message counts |
+| `imap_search_messages` | Search with cursor pagination |
+| `imap_get_message` | Parsed message (text, HTML, attachments) |
+| `imap_get_message_raw` | RFC822 source |
 
-### IMAP Write (11)
+### Write (11 tools)
 
-| Tool | Purpose |
-|------|---------|
+| Tool | What it does |
+|------|-------------|
 | `imap_update_message_flags` | Add/remove flags |
-| `imap_copy_message` | Copy to mailbox (cross-account supported) |
-| `imap_move_message` | Move to mailbox |
+| `imap_copy_message` | Copy (cross-account supported) |
+| `imap_move_message` | Move to folder |
 | `imap_delete_message` | Delete with confirmation |
 | `imap_create_mailbox` | Create folder |
 | `imap_delete_mailbox` | Delete folder |
 | `imap_rename_mailbox` | Rename folder |
 | `imap_append_message` | Append raw message |
-| `imap_bulk_move` | Move up to 500 messages |
-| `imap_bulk_delete` | Delete up to 500 messages |
-| `imap_bulk_update_flags` | Update flags on up to 500 messages |
+| `imap_bulk_move` | Move up to 500 at once |
+| `imap_bulk_delete` | Delete up to 500 at once |
+| `imap_bulk_update_flags` | Flag up to 500 at once |
 
-### SMTP (5)
+### Send (6 tools)
 
-| Tool | Purpose |
-|------|---------|
-| `smtp_list_accounts` | List configured SMTP accounts |
-| `smtp_send_message` | Send new email (text/HTML, CC/BCC) |
-| `smtp_reply_message` | Reply with proper threading headers |
-| `smtp_forward_message` | Forward with original message inline |
+| Tool | What it does |
+|------|-------------|
+| `smtp_list_accounts` | List SMTP accounts |
+| `smtp_send_message` | Send email (text/HTML, CC/BCC) |
+| `smtp_reply_message` | Reply with threading headers |
+| `smtp_forward_message` | Forward with original inline |
 | `smtp_verify_account` | Test SMTP connectivity |
+| `graph_send_message` | Send via Microsoft Graph API |
 
-### Microsoft Graph API (1)
+### Bulk Operations (2 tools)
 
-| Tool | Purpose |
-|------|---------|
-| `graph_send_message` | Send via Graph API (required for hotmail/outlook.com) |
+| Tool | What it does |
+|------|-------------|
+| `imap_search_and_move` | Search + move matches |
+| `imap_search_and_delete` | Search + delete matches |
 
-### Search & Bulk (2)
+## Multi-Account
 
-| Tool | Purpose |
-|------|---------|
-| `imap_search_and_move` | Search and move matches |
-| `imap_search_and_delete` | Search and delete matches |
+Configure as many accounts as you need:
 
-Write/send tools require `MAIL_IMAP_WRITE_ENABLED=true` and/or `MAIL_SMTP_WRITE_ENABLED=true`.
+```bash
+# Gmail
+MAIL_IMAP_GMAIL_HOST=imap.gmail.com
+MAIL_IMAP_GMAIL_USER=me@gmail.com
+MAIL_IMAP_GMAIL_PASS=app-password
+
+# Microsoft 365
+MAIL_IMAP_WORK_HOST=outlook.office365.com
+MAIL_IMAP_WORK_USER=me@company.com
+MAIL_OAUTH2_WORK_PROVIDER=microsoft
+MAIL_OAUTH2_WORK_CLIENT_ID=your-client-id
+MAIL_OAUTH2_WORK_CLIENT_SECRET=none
+MAIL_OAUTH2_WORK_REFRESH_TOKEN=your-token
+
+# Zoho
+MAIL_IMAP_DEFAULT_HOST=imap.zoho.com
+MAIL_IMAP_DEFAULT_USER=info@mydomain.com
+MAIL_IMAP_DEFAULT_PASS=password
+MAIL_SMTP_DEFAULT_HOST=smtp.zoho.com
+MAIL_SMTP_DEFAULT_USER=info@mydomain.com
+MAIL_SMTP_DEFAULT_PASS=password
+MAIL_SMTP_DEFAULT_SECURE=starttls
+```
+
+Use `account_id` in tool calls: `"account_id": "gmail"`, `"account_id": "work"`, `"account_id": "default"`.
+
+## Security
+
+- **TLS enforced** on all connections (except localhost proxies)
+- **Passwords in SecretString** — never logged or returned in responses
+- **Write operations gated** — require explicit `MAIL_IMAP_WRITE_ENABLED=true`
+- **Send operations gated** — require explicit `MAIL_SMTP_WRITE_ENABLED=true`
+- **Delete confirmation** — requires `confirm: true`
+- **HTML sanitized** with ammonia (prevents XSS)
+- **Bounded outputs** — body text, HTML, attachments truncated to configurable limits
+- **OAuth2 tokens cached** with 10-minute refresh margin
+- **No secrets in responses** — credentials never exposed via MCP tools
 
 ## Configuration Reference
+
+<details>
+<summary>Full environment variable reference</summary>
 
 ### IMAP (per account)
 
@@ -161,7 +209,7 @@ Write/send tools require `MAIL_IMAP_WRITE_ENABLED=true` and/or `MAIL_SMTP_WRITE_
 | `MAIL_SMTP_<ID>_PASS` | No | — | Password (optional with OAuth2) |
 | `MAIL_SMTP_<ID>_SECURE` | No | starttls | `starttls`, `tls`, or `plain` |
 
-### OAuth2 (per account, for IMAP XOAUTH2)
+### OAuth2 (per account)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -170,7 +218,7 @@ Write/send tools require `MAIL_IMAP_WRITE_ENABLED=true` and/or `MAIL_SMTP_WRITE_
 | `MAIL_OAUTH2_<ID>_CLIENT_SECRET` | Yes | — | Client secret (`none` for public clients) |
 | `MAIL_OAUTH2_<ID>_REFRESH_TOKEN` | Yes | — | Refresh token |
 
-### Graph API OAuth2 (per account, for Microsoft Graph sending)
+### Graph API OAuth2 (per account)
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -178,8 +226,6 @@ Write/send tools require `MAIL_IMAP_WRITE_ENABLED=true` and/or `MAIL_SMTP_WRITE_
 | `MAIL_GRAPH_<ID>_CLIENT_ID` | Yes | — | OAuth2 client ID |
 | `MAIL_GRAPH_<ID>_CLIENT_SECRET` | Yes | — | Client secret (`none` for public clients) |
 | `MAIL_GRAPH_<ID>_REFRESH_TOKEN` | Yes | — | Refresh token (Mail.Send scope) |
-
-> **Note:** Enterprise Microsoft 365 accounts require separate tokens for IMAP and Graph API due to Microsoft's single-resource token restriction. Personal accounts (hotmail/outlook.com) can use a single token for both.
 
 ### Global Settings
 
@@ -193,24 +239,54 @@ Write/send tools require `MAIL_IMAP_WRITE_ENABLED=true` and/or `MAIL_SMTP_WRITE_
 | `MAIL_IMAP_GREETING_TIMEOUT_MS` | 15000 | TLS/greeting timeout |
 | `MAIL_IMAP_SOCKET_TIMEOUT_MS` | 300000 | Socket I/O timeout |
 
+</details>
+
+## Roadmap
+
+- [x] IMAP read operations (search, fetch, parse)
+- [x] IMAP write operations (copy, move, delete, flags)
+- [x] IMAP bulk operations (up to 500 per call)
+- [x] Cursor-based pagination with TTL
+- [x] SMTP send, reply, forward
+- [x] Microsoft Graph API (sendMail)
+- [x] OAuth2 XOAUTH2 (Google + Microsoft)
+- [x] Separate Graph API tokens for enterprise
+- [x] Multi-account via environment variables
+- [x] PDF text extraction from attachments
+- [x] HTML sanitization (ammonia)
+- [x] Provider setup documentation with direct links
+- [ ] Docker image
+- [ ] npm/npx distribution
+- [ ] Google Calendar integration
+- [ ] Attachment sending (SMTP/Graph)
+- [ ] Draft management
+- [ ] Contact search
+- [ ] Hosted documentation site
+
 ## Documentation
 
-- [Account Setup Guide](docs/account-setup.md) — Step-by-step per provider, OAuth2 device code flow, App Passwords, Azure Client ID registration
-- [Tool Contract](docs/tool-contract.md) — Complete tool definitions, input/output schemas
-- [Message ID Format](docs/message-id-format.md) — Stable message identifier format
-- [Cursor Pagination](docs/cursor-pagination.md) — Pagination behavior and expiration
-- [Security](docs/security.md) — Security features and best practices
-- [Advanced Configuration](docs/advanced-configuration.md) — Timeouts and performance tuning
+| Guide | Description |
+|-------|-------------|
+| [Account Setup](docs/account-setup.md) | Step-by-step per provider, OAuth2, App Passwords, Azure Client ID |
+| [Tool Contract](docs/tool-contract.md) | Complete tool definitions and schemas |
+| [Message ID Format](docs/message-id-format.md) | Stable message identifier format |
+| [Cursor Pagination](docs/cursor-pagination.md) | Pagination behavior and expiration |
+| [Security](docs/security.md) | Security features and best practices |
+| [Advanced Configuration](docs/advanced-configuration.md) | Timeouts and performance tuning |
 
 ## Development
 
 ```bash
-cargo test          # 40 unit tests
-cargo fmt -- --check
-cargo clippy --all-targets -- -D warnings
+cargo test              # 40 unit tests
+cargo fmt -- --check    # formatting
+cargo clippy --all-targets -- -D warnings  # linting
 ```
 
 See `AGENTS.md` for contributor guidelines.
+
+## Contributing
+
+Contributions welcome! Check out the [issues](https://github.com/tecnologicachile/mail-imap-mcp-rs/issues) for good first issues.
 
 ## License
 
