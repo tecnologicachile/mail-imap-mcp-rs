@@ -170,6 +170,20 @@ Get your token in 1 minute with device code flow. See [Account Setup Guide](docs
 | `ews_get_message` | Get full email content via EWS |
 | `ews_send_message` | Send email via EWS |
 
+### Attachments
+
+Send files with any send tool. Two modes:
+
+```json
+// Large files — MCP reads from disk (recommended)
+"attachments": [{"file_path": "/path/to/report.pdf"}]
+
+// Small files — inline base64
+"attachments": [{"filename": "note.txt", "content_type": "text/plain", "content_base64": "SGVsbG8="}]
+```
+
+Filename and MIME type are auto-detected from the file path. Reply with `include_original_attachments: true` to forward original attachments.
+
 ### Bulk Operations (2 tools)
 
 | Tool | What it does |
