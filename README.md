@@ -2,7 +2,7 @@
   <h1 align="center">mail-imap-mcp-rs</h1>
   <p align="center">
     <strong>Production-ready email MCP server for AI agents</strong><br>
-    IMAP + SMTP + Microsoft Graph API — built in Rust
+    IMAP + SMTP + EWS + Microsoft Graph API — built in Rust
   </p>
   <p align="center">
     <a href="https://github.com/tecnologicachile/mail-imap-mcp-rs/actions"><img src="https://img.shields.io/github/actions/workflow/status/tecnologicachile/mail-imap-mcp-rs/ci.yml?label=build" alt="Build"></a>
