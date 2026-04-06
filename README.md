@@ -294,7 +294,9 @@ Use `account_id` in tool calls: `"account_id": "gmail"`, `"account_id": "work"`,
 | `MAIL_IMAP_WRITE_ENABLED` | false | Enable IMAP write operations |
 | `MAIL_SMTP_WRITE_ENABLED` | false | Enable SMTP/Graph send operations |
 | `MAIL_SMTP_SAVE_SENT` | true | Save sent emails to IMAP Sent folder |
-| `MAIL_SMTP_TIMEOUT_MS` | 30000 | SMTP operation timeout |
+| `MAIL_SMTP_CONNECT_TIMEOUT_MS` | 30000 | SMTP TCP/TLS/auth timeout (connect phase) |
+| `MAIL_SMTP_SEND_TIMEOUT_MS` | 300000 | SMTP DATA transmission timeout (5 min — accommodates large attachments) |
+| `MAIL_SMTP_TIMEOUT_MS` | _(deprecated)_ | Legacy single timeout. Honored as fallback for `MAIL_SMTP_SEND_TIMEOUT_MS`. Prefer the split vars above. |
 | `MAIL_IMAP_CONNECT_TIMEOUT_MS` | 30000 | TCP connection timeout |
 | `MAIL_IMAP_GREETING_TIMEOUT_MS` | 15000 | TLS/greeting timeout |
 | `MAIL_IMAP_SOCKET_TIMEOUT_MS` | 300000 | Socket I/O timeout |
