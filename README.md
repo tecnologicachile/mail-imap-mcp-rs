@@ -145,6 +145,20 @@ Add to your MCP client config (Claude Code, Cursor, etc.):
 
 That's it. Your AI agent can now read, search, send, reply, and manage emails.
 
+### Open WebUI
+
+Open WebUI expects an HTTP/OpenAPI tool server, so use `mail-mcp` through the
+[`mcpo`](https://github.com/open-webui/mcpo) adapter:
+
+```bash
+pip install mcpo
+cargo build --release
+MCPO_PORT=8000 ./scripts/run-open-webui-adapter.sh
+```
+
+Then add `http://<host>:8000` as an OpenAPI server in Open WebUI. Full setup:
+[docs/open-webui.md](docs/open-webui.md)
+
 ### Microsoft Account? Use Graph API
 
 Microsoft blocks SMTP on personal accounts. Use Graph API instead:
@@ -407,6 +421,7 @@ Use `account_id` in tool calls: `"account_id": "gmail"`, `"account_id": "work"`,
 | [Cursor Pagination](docs/cursor-pagination.md) | Pagination behavior and expiration |
 | [Security](docs/security.md) | Security features and best practices |
 | [Advanced Configuration](docs/advanced-configuration.md) | Timeouts and performance tuning |
+| [Open WebUI](docs/open-webui.md) | Run `mail-mcp` behind `mcpo` for Open WebUI/OpenAPI integration |
 
 ## Development
 
