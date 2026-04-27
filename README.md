@@ -15,6 +15,21 @@
 
 Most email MCP servers only do IMAP reads. This one does **everything**: read, search, send, reply, forward, bulk operations, Microsoft Graph API, and Exchange Web Services — with real OAuth2, multi-account, and multi-provider support. Written in Rust for speed and safety.
 
+## What's New in v0.4.3
+
+- **Server-side guidance against malformed tool calls.** The MCP
+  `instructions` block now explicitly tells the calling LLM that
+  `body_text` and `body_html` are TWO SEPARATE JSON fields and must
+  NEVER be concatenated. Previous wording ("send BOTH body_text AND
+  body_html") was ambiguous and some LLMs interpreted it as "concatenate
+  both with `<body_text>...</body_html>` pseudo-tags inside a single
+  `body_text` string". When that happens, the recipient sees garbled
+  duplicated content, AND any later Claude session that opens the saved
+  copy via this MCP gets a Usage Policy block (the leaked
+  `<invoke>...</invoke>` looks like a prompt-injection attempt to safety
+  filters). The new instruction shows a CORRECT vs WRONG example and
+  bans pseudo-tags / tool-call wrapper syntax inside email fields.
+
 ## What's New in v0.4.2
 
 - **Release pipeline fixed**: the `publish-npm` job in the CI release
