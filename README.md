@@ -15,6 +15,32 @@
 
 Most email MCP servers only do IMAP reads. This one does **everything**: read, search, send, reply, forward, bulk operations, Microsoft Graph API, and Exchange Web Services — with real OAuth2, multi-account, and multi-provider support. Written in Rust for speed and safety.
 
+## What's New in v0.4.5
+
+- **`serverInfo` ahora reporta `name="mail-mcp"` + `version` del crate** (antes
+  el framework devolvía su propio `rmcp 0.16.0`, que nunca cambia entre
+  releases). Útil para verificar la versión activa con `/mcp` y para que
+  cualquier cache que el cliente lleve por (server, version) se invalide en
+  cada bump.
+- **Reorganización de las instrucciones MCP**: las 3 reglas críticas
+  anti-concatenación (que en v0.4.3 y v0.4.4 estaban al final del bloque y
+  podían perderse por truncamientos / atención diluida) ahora aparecen como
+  **HARD RULE #1, #2, #3 al INICIO**, justo después del título. Consolidadas
+  en 3 párrafos breves (antes eran 3 secciones largas de ~1500 caracteres
+  combinados).
+- **Sin cambios funcionales en el servidor.** Mismo SMTP/IMAP/EWS/Graph,
+  mismo set de tools, mismo comportamiento. Solo cambios en el texto
+  expuesto al cliente.
+
+### Importante para que estas reglas tomen efecto
+
+Los clientes que reanudan una sesión con `claude --continue` (o
+`/resume`) **NO refrescan el `system_prompt` MCP** — preservan el del
+primer handshake de esa sesión. Si tu sesión es de antes de v0.4.5,
+las reglas no llegarán a tu contexto aunque el binario en disco esté
+actualizado. Para recibirlas, arranca una sesión NUEVA en el proyecto
+(no `--continue`).
+
 ## What's New in v0.4.4
 
 - **Preview hygiene rule** in MCP `instructions`: when the LLM shows the

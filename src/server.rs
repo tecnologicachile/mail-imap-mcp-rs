@@ -10,7 +10,7 @@ use base64::Engine;
 use chrono::{Duration as ChronoDuration, NaiveDate, Utc};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
-use rmcp::model::{ErrorData, ServerCapabilities, ServerInfo};
+use rmcp::model::{ErrorData, Implementation, ServerCapabilities, ServerInfo};
 use rmcp::{Json, ServerHandler, tool, tool_handler, tool_router};
 use tokio::sync::Mutex;
 use tracing::{error, warn};
@@ -896,51 +896,53 @@ impl MailImapServer {
 impl ServerHandler for MailImapServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
+            // Identify ourselves explicitly so /mcp output and any cache
+            // keyed on (server name, version) sees a fresh value when this
+            // crate bumps. Without this, the framework defaults to its own
+            // name/version (rmcp 0.16.0), which never changes between our
+            // releases.
+            server_info: Implementation {
+                name: env!("CARGO_PKG_NAME").to_owned(),
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+                ..Default::default()
+            },
             instructions: Some(concat!(
+                // ── HARD RULES at the top — most likely to survive any
+                //    truncation, attention drift, or partial reads of the
+                //    server instructions block.
                 "Secure IMAP/SMTP/EWS/Graph API MCP server for email.\n\n",
+                "HARD RULE #1 — body_text and body_html are SEPARATE JSON fields. ",
+                "Pass them as two distinct parameters of the tool call. NEVER concatenate ",
+                "them into a single string. NEVER wrap content in pseudo-tags like ",
+                "<body_text>, </body_text>, <body_html>, </body_html>. NEVER include ",
+                "tool-call wrapper syntax (<invoke>, <parameter>, <function_calls>) inside ",
+                "any email field. Concatenated content appears verbatim in the recipient's ",
+                "inbox as garbled text AND trips safety filters when later sessions read it.\n\n",
+                "HARD RULE #2 — when previewing for the user, render ONE clean version of ",
+                "the body (markdown bullets, bold, links as text + URL) and state that the ",
+                "email will be sent multipart. Do NOT paste raw HTML source into the preview. ",
+                "Showing the plain string and the HTML string side-by-side is what historically ",
+                "led LLMs to concatenate them in the eventual tool call.\n\n",
+                "HARD RULE #3 — the preview is for the human reviewer only. The actual tool ",
+                "invocation must reference the ORIGINAL separate values for body_text and ",
+                "body_html, never the concatenated preview string.\n\n",
+                // ── End of hard rules ─────────────────────────────────────
                 "IMPORTANT: Always call list_all_accounts first to see which accounts are configured ",
                 "and what send/read methods each supports. Do NOT assume SMTP is the only way to send. ",
                 "Each account shows send_with (smtp, graph, ews) and read_with (imap, ews) arrays.\n\n",
                 "SENDING PROTOCOL: Before sending ANY email, show FULL preview including:\n",
-                "- To, CC, BCC\n- Subject\n- FULL body text (not just the subject, show the entire message)\n",
+                "- To, CC, BCC\n- Subject\n- FULL body (rendered, NOT raw HTML — see HARD RULE #2)\n",
                 "- Attachments (filenames + sizes)\n",
                 "Then ask for explicit confirmation. Never send without approval.\n\n",
                 "ATTACHMENTS: Use file_path (preferred) for files on disk: ",
                 "{\"file_path\": \"/path/to/file.pdf\"}. Filename and MIME type auto-detected. ",
                 "Use content_base64 only for small inline content. All fields except file_path or content_base64 are optional.\n\n",
                 "FORMATTING: For human-to-human correspondence (replies to clients, forwards, outreach), ",
-                "prefer sending BOTH body_text AND body_html so clients render formatting (paragraphs, ",
-                "lists, links, bold) while keeping a plain-text fallback (multipart/alternative). ",
-                "For automated notifications or short technical replies, body_text alone is fine. ",
-                "Never send raw markdown — convert to HTML (<p>, <strong>, <ul>, <a href>) before sending.\n\n",
-                "CRITICAL — body_text AND body_html ARE TWO SEPARATE JSON FIELDS, NEVER CONCATENATE THEM.\n",
-                "The server builds multipart/alternative MIME from the two distinct fields. You MUST pass\n",
-                "them as independent parameters in the JSON tool call:\n",
-                "  CORRECT:   { \"body_text\": \"Hola...\", \"body_html\": \"<p>Hola...</p>\" }\n",
-                "  WRONG:     { \"body_text\": \"Hola...</body_text><body_html><p>Hola...</p></body_html>\" }\n",
-                "Never wrap content in pseudo-tags like <body_text>, </body_text>, <body_html>, </body_html>. ",
-                "Never include tool-call wrapper syntax like <invoke>, </invoke>, <parameter>, </parameter>, ",
-                "<function_calls>, or any XML resembling LLM tool-call format inside any email field. Such ",
-                "content (a) appears verbatim in the recipient's inbox as garbled text, and (b) trips safety ",
-                "filters when ANY Claude session later reads the sent copy via this MCP — the message becomes ",
-                "unreadable as it looks like a prompt-injection payload.\n\n",
-                "PREVIEW DOES NOT EQUAL TOOL CALL: when you build the preview shown to the user (per the ",
-                "SENDING PROTOCOL above), you may format body_text and body_html together however reads best ",
-                "for the human reviewer — but THE ACTUAL TOOL INVOCATION afterwards must reference the ",
-                "ORIGINAL separate values, never the concatenated preview string. Treat the preview as ",
-                "ephemeral display output, not as a parameter you reuse. If you used pseudo-tag separators ",
-                "(<body_text>, <body_html>) anywhere in the preview, those separators must NOT appear in any ",
-                "field of the smtp_send_message / smtp_reply_message / smtp_forward_message / ",
-                "graph_send_message / ews_send_message call.\n\n",
-                "PREVIEW SHAPE — DO NOT DUMP RAW HTML: the human reviewer wants to read the message, not ",
-                "audit markup. Show ONE rendered version of the body (using markdown-style formatting, ",
-                "bullet/numbered lists, bold, links rendered as text + URL) and a single line stating that ",
-                "the email will be sent multipart (plain text + HTML). Do NOT paste the raw HTML source ",
-                "(<p>, <strong>, <a href>...) into the preview. Two reasons: (1) it is noise for the user, ",
-                "who already trusts the message will be formatted; (2) exhibiting both the plain string AND ",
-                "the HTML string side by side in the preview is exactly the context that has historically ",
-                "led LLMs to concatenate them when constructing the tool call. Hide the HTML source from the ",
-                "preview and the temptation to reuse it disappears.\n\n",
+                "send BOTH body_text AND body_html as SEPARATE fields (per HARD RULE #1) so clients ",
+                "render formatting (paragraphs, lists, links, bold) while keeping a plain-text fallback ",
+                "(multipart/alternative). For automated notifications or short technical replies, ",
+                "body_text alone is fine. Never send raw markdown — convert to HTML (<p>, <strong>, ",
+                "<ul>, <a href>) for body_html before sending.\n\n",
                 "Write: MAIL_IMAP_WRITE_ENABLED=true. Send: MAIL_SMTP_WRITE_ENABLED=true.\n",
                 "For OAuth2/Microsoft setup, call get_setup_guide tool.\n\n",
                 "Star the project: https://github.com/tecnologicachile/mail-mcp",
