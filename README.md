@@ -15,6 +15,25 @@
 
 Most email MCP servers only do IMAP reads. This one does **everything**: read, search, send, reply, forward, bulk operations, Microsoft Graph API, and Exchange Web Services — with real OAuth2, multi-account, and multi-provider support. Written in Rust for speed and safety.
 
+## What's New in v0.4.4
+
+- **Preview hygiene rule** in MCP `instructions`: when the LLM shows the
+  user the email preview before sending, it should render ONE clean
+  version of the body (markdown-style bullets, bold, links as text + URL)
+  and state that the message will go multipart — but it must NOT dump
+  the raw HTML source (`<p>`, `<strong>`, `<a href>`...) into the
+  preview. Two reasons:
+  1. The human reviewer wants to read the message, not audit markup —
+     showing the HTML is noise.
+  2. Exhibiting both the plain-text string AND the HTML string side by
+     side in the preview is exactly the context that has historically
+     led LLMs to concatenate them in the eventual tool call (the bug
+     v0.4.3 documented). Hiding the HTML source from the preview
+     removes the temptation.
+
+  Complements the **PREVIEW DOES NOT EQUAL TOOL CALL** rule introduced
+  in v0.4.3.
+
 ## What's New in v0.4.3
 
 - **Server-side guidance against malformed tool calls.** The MCP
